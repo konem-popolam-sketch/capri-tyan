@@ -9,6 +9,22 @@ from ctypes import wintypes
 log = logging.getLogger("capri")
 u = ctypes.windll.user32
 
+
+def _enable_dpi_awareness():
+    """Windows отдаёт не-DPI-aware процессу «виртуальные» координаты окон (150% → окно на треть меньше),
+    а mouse_event работает в физических пикселях: клик улетает мимо. Включаем физические пиксели,
+    чтобы GetWindowRect, SetCursorPos и снимки экрана жили в одной системе координат."""
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:  # noqa: BLE001 — на старых Windows shcore нет
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:  # noqa: BLE001
+            log.debug("Не удалось включить DPI-awareness")
+
+
+_enable_dpi_awareness()
+
 # ---------------- ввод текста ----------------
 
 ULONG_PTR = ctypes.c_size_t

@@ -320,8 +320,63 @@ def _wait_steam_foreground(timeout=8.0):
     return None
 
 
+def chat_window(name, nick=None, timeout=10.0):
+    """Окно личной переписки с этим человеком: заголовок — его ник, отдельно от «Список друзей»/«Steam»."""
+    skip = {"список друзей", "steam", "друзья", "friends"}
+    queries = [q for q in (name, nick) if q]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for hwnd, title in steam_windows():
+            t = _norm(title)
+            if not t or t in skip:
+                continue
+            for query in queries:
+                if _score(_variants(query), t) >= 0.85:
+                    return hwnd
+        time.sleep(0.4)
+    return None
+
+
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+
+
+def _is_foreground(hwnd):
+    import ctypes
+    return ctypes.windll.user32.GetForegroundWindow() == hwnd
+
+
+def click_input(hwnd):
+    """Ткнуть в поле ввода внизу окна переписки. Возвращает True, если окно реально активно:
+    по клику в неактивное окно текст уйдёт в чужое приложение, поэтому без подтверждения не печатаем."""
+    import ctypes
+    import automation
+    u = ctypes.windll.user32
+    for _ in range(3):
+        automation.focus(hwnd)
+        if _is_foreground(hwnd):
+            break
+        # поверх «всегда сверху» окон (Капри, редакторы) окно чата не поднимется обычным способом
+        u.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+        automation.focus(hwnd)
+        if _is_foreground(hwnd):
+            break
+        time.sleep(0.3)
+    if not _is_foreground(hwnd):
+        return False
+    time.sleep(0.3)
+    automation.click_point(hwnd, 0.35, 0.93)
+    time.sleep(0.3)
+    return _is_foreground(hwnd)
+
+
+def _untop(hwnd):
+    import ctypes
+    ctypes.windll.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, 0x0001 | 0x0002)
+
+
 def _focus_steam():
-    """Вывести клиент Steam вперёд: сначала окно «Список друзей» (там живой чат), потом главное."""
+    """Вывести клиент Steam вперёд: сначала окно «Список друзей», потом главное."""
     import automation
     windows = steam_windows()
     for want in ("друз", "friend"):
@@ -364,17 +419,24 @@ def send(name, text):
     dismiss_dialogs()
     if not open_chat(steam_id):
         return "no_window", nick
-    # печатаем только когда на переднем плане именно Steam — иначе текст уйдёт в чужое окно
-    if not _wait_steam_foreground(timeout=6.0) and not _focus_steam():
+    # текст пишем только в отдельное окно переписки с ЭТИМ человеком: в окне «Список друзей»
+    # вставка попадает в строку поиска, и сообщение никуда не уходит
+    hwnd = chat_window(name, nick, timeout=12.0)
+    if not hwnd and not running():
+        return "no_steam", None
+    if not hwnd:
+        log.info("Окно переписки Steam с «%s» не открылось", nick)
         return "no_window", nick
-    if not _wait_steam_foreground(timeout=4.0):
-        return "no_window", nick
-    dismiss_dialogs()
 
-    time.sleep(0.8)
+    dismiss_dialogs()
+    if not click_input(hwnd):
+        log.info("Не удалось вывести окно чата Steam с «%s» на передний план", nick)
+        return "no_window", nick
     automation.input_text(text)
     time.sleep(0.35)
     from actions import send_keys
     send_keys(["enter"])
+    time.sleep(0.4)
+    _untop(hwnd)
     log.info("Отправила в Steam для %s: %s", nick, text)
     return "sent", nick
