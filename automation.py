@@ -117,6 +117,46 @@ def _find_by_title(keywords):
     return min(found, key=lambda x: x[0])[1] if found else None
 
 
+def windows_of(exe_names):
+    """Все видимые окна процессов с этими именами: [(hwnd, заголовок)]. Нужен программам, у которых чаты
+    висят отдельными окнами с заголовком-именем собеседника (Steam)."""
+    import psutil
+    exe_names = {n.lower() for n in exe_names}
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def cb(hwnd, _):
+        if u.IsWindowVisible(hwnd) and window_title(hwnd):
+            pid = wintypes.DWORD()
+            u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            try:
+                if psutil.Process(pid.value).name().lower() in exe_names:
+                    found.append((hwnd, window_title(hwnd)))
+            except Exception:
+                pass
+        return True
+    u.EnumWindows(cb, 0)
+    return found
+
+
+def click_point(hwnd, fx=0.5, fy=0.5):
+    """Кликнуть левой кнопкой в точку окна (fx, fy — доли ширины и высоты). Курсор возвращается на место."""
+    r = wintypes.RECT()
+    u.GetWindowRect(hwnd, ctypes.byref(r))
+    x = r.left + int((r.right - r.left) * fx)
+    y = r.top + int((r.bottom - r.top) * fy)
+    old = wintypes.POINT()
+    u.GetCursorPos(ctypes.byref(old))
+    u.SetCursorPos(x, y)
+    time.sleep(0.05)
+    u.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+    time.sleep(0.03)
+    u.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+    time.sleep(0.1)
+    u.SetCursorPos(old.x, old.y)
+    return True
+
+
 def is_foreground(hwnd):
     """Активно ли окно hwnd (или его дочернее/владеющее — у браузеров это может быть другое окно того же
     процесса)."""
@@ -331,7 +371,8 @@ def focus_search(title):
     return "browser"
 
 
-MESSENGERS = {"telegram.exe", "discord.exe", "whatsapp.exe", "viber.exe"}
+MESSENGERS = {"telegram.exe", "discord.exe", "whatsapp.exe", "viber.exe",
+              "steam.exe", "steamwebhelper.exe"}
 
 
 def foreground_process():

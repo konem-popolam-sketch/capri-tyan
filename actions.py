@@ -19,6 +19,7 @@ import psutil
 
 import automation
 import media
+import steam_chat
 from persona import line
 
 log = logging.getLogger("capri")
@@ -1005,6 +1006,12 @@ class Actions:
             (r"^(нажми на поиск|нажми поиск|перейди в поиск|в поиск|поиск|поставь курсор в поиск)$",
              self.search_field),
             (r"^(нажми|нажать|зажми|жми|набери сочетание) (?P<k>.+)$", self.press),
+            # --- сообщение другу в чат Steam: «напиши в стиме Пете привет» ---
+            (r"^(напиши|написать|отправь|отправить|скинь|кинь|передай)\s*(мне\s+)?(в\s*)?"
+             r"(стим\w*|steam\w*|stim\w*)(?P<rest>.*)$", self.steam),
+            # «напиши Пете в стиме привет» — имя перед «в стиме»
+            (r"^(напиши|написать|отправь|отправить|скинь|кинь|передай)\s+(?P<who>.+?)\s+(в\s*)?"
+             r"(стим\w*|steam\w*|stim\w*)\s+(?P<rest>.+)$", self.steam),
             (rf"^({automation.TYPE_VERBS})\s+\S", self.type_cmd),
             (r"^(открой |зайди в |перейди в |выбери |найди )?(в )?(телеграм\w*|telegram|телег\w*|тг )?\s*"
              r"((?P<ord>{}) )?(чат\w*|chat|диалог\w*|переписк\w*|контакт\w*|беседу|беседа|группу|канал)"
@@ -1463,6 +1470,32 @@ class Actions:
             # чат не открылся — дальше по цепочке ничего не печатаем, чтобы не написать не туда
             return Reply(line("chat_not_found", t=name or f"номер {index or 1}"), "fail")
         return Reply(line("chat_open", t=name or f"чат номер {index or 1}"))
+
+    def steam(self, c, m):
+        """«напиши в стиме Пете привет» — сообщение другу в чат Steam.
+        Имя друга ищется в локальном списке друзей Steam, чат открывается по steam://, текст печатается
+        только если открылось окно чата с этим человеком."""
+        rest = (m.groupdict().get("rest") or "").strip()
+        who = (m.groupdict().get("who") or "").strip()
+        if who:  # «напиши Пете в стиме привет» — имя назвали до «в стиме»
+            rest = f"{who} {rest}".strip()
+        rest = re.sub(r"^(сообщение|текст|что-нибудь|что нибудь|пару слов)\s*", "", rest, flags=re.I)
+        if not rest:
+            return Reply(line("steam_who"))
+        name, text = steam_chat.split_message(rest)
+        text = text.strip(" ,.:;-—\"'«»")
+        if not text:
+            return Reply(line("steam_text", t=name))
+        status, info = steam_chat.send(name, text)
+        if status == "sent":
+            return Reply(line("steam_sent", t=info, m=text))
+        if status == "not_found":
+            return Reply(line("steam_not_found", t=name), "fail")
+        if status == "ambiguous":
+            return Reply(line("steam_ambiguous", t=", ".join(info[:4])), "fail")
+        if status == "no_steam":
+            return Reply(line("steam_offline"), "fail")
+        return Reply(line("steam_no_window", t=info or name), "fail")
 
     def run_chain(self, steps):
         """Выполняет шаги по очереди, держа в уме, в каком окне мы сейчас (Telegram, YouTube, браузер…)."""
